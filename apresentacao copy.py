@@ -282,18 +282,19 @@ with col3:
 data_inicio = pd.to_datetime(data_inicio)
 data_fim = pd.to_datetime(data_fim)
     
-# --- 4. PREPARAÇÃO DOS DADOS (CUMSUM) ---
+# --- 4. PREPARAÇÃO DOS DADOS (PREENCHIMENTO DE LACUNAS + CUMSUM) ---
 df_para_cumsum = df_base[
     (df_base["Obra"].isin(obras_selecionadas))
 ].copy()
 
+# 1. Adicionar as 10 semanas ANTES e DEPOIS (sua lógica anterior + a nova)
 zero_rows = []
 weeks_to_add = 10 
 
 for obra in obras_selecionadas:
     obra_df = df_para_cumsum[df_para_cumsum['Obra'] == obra]
     if not obra_df.empty:
-        # --- LÓGICA ANTERIOR (10 semanas ANTES) ---
+        # 10 Semanas ANTES
         min_obra_date = obra_df['Semana'].min()
         current_date = min_obra_date
         for _ in range(weeks_to_add):
@@ -304,7 +305,7 @@ for obra in obras_selecionadas:
                 'Volume_Projetado': 0, 'Volume_Fabricado': 0, 'Volume_Montado': 0
             })
             
-        # --- NOVA LÓGICA (10 semanas DEPOIS) ---
+        # 10 Semanas DEPOIS
         max_obra_date = obra_df['Semana'].max()
         current_date_future = max_obra_date
         for _ in range(weeks_to_add):
@@ -317,18 +318,40 @@ for obra in obras_selecionadas:
 
 if zero_rows:
     df_zero = pd.DataFrame(zero_rows)
-    # Concatena os dados originais com as semanas antes e depois
     df_para_cumsum = pd.concat([df_zero, df_para_cumsum], ignore_index=True)
 
-# Ordena para garantir que o CUMSUM funcione na ordem cronológica correta
-df_para_cumsum = df_para_cumsum.sort_values(["Obra", "Semana"]) 
+# 2. PREENCHER LACUNAS NO MEIO (Reindexar datas)
+# Isso garante que se houver um buraco entre a semana 1 e 3, a semana 2 é criada.
+dfs_preenchidos = []
 
-# Calcula o acumulado (as semanas futuras terão o mesmo valor da última semana real)
+if not df_para_cumsum.empty:
+    for obra, dados in df_para_cumsum.groupby("Obra"):
+        # Remove duplicatas de data se houver (segurança) e define index
+        dados = dados.groupby("Semana").sum(numeric_only=True).reset_index()
+        dados = dados.set_index("Semana").sort_index()
+        
+        # Cria um range completo de datas (semana a semana) do início ao fim desta obra
+        idx_completo = pd.date_range(start=dados.index.min(), end=dados.index.max(), freq='7D')
+        
+        # Reindexa: cria as linhas vazias e preenche volumes com 0
+        dados_reindex = dados.reindex(idx_completo)
+        dados_reindex['Obra'] = obra
+        dados_reindex[['Volume_Projetado', 'Volume_Fabricado', 'Volume_Montado']] = \
+            dados_reindex[['Volume_Projetado', 'Volume_Fabricado', 'Volume_Montado']].fillna(0)
+        
+        dfs_preenchidos.append(dados_reindex)
+    
+    # Recria o df principal com as lacunas preenchidas
+    df_para_cumsum = pd.concat(dfs_preenchidos).reset_index().rename(columns={'index': 'Semana'})
+
+# 3. CÁLCULO DO ACUMULADO (CUMSUM)
+# Agora que temos 0 nas semanas vazias, o cumsum vai repetir o valor da semana anterior
+df_para_cumsum = df_para_cumsum.sort_values(["Obra", "Semana"]) 
 df_para_cumsum["Volume_Projetado"] = df_para_cumsum.groupby("Obra")["Volume_Projetado"].cumsum()
 df_para_cumsum["Volume_Fabricado"] = df_para_cumsum.groupby("Obra")["Volume_Fabricado"].cumsum()
 df_para_cumsum["Volume_Montado"] = df_para_cumsum.groupby("Obra")["Volume_Montado"].cumsum()
 
-# Aplica o filtro de data selecionado pelo usuário
+# Aplica o filtro de visualização (Datas globais selecionadas)
 df = df_para_cumsum[
     (df_para_cumsum["Semana"] >= data_inicio) & 
     (df_para_cumsum["Semana"] <= data_fim)
