@@ -220,7 +220,7 @@ def salvar_dados_usuario(df_previsoes, df_orcamentos):
 # ========================================================
 #                INTERFACE STREAMLIT
 # ========================================================
-st.set_page_config(page_title="Dashboard de Volumes", layout="wide")
+st.set_page_config(page_title="Reunião de Prazos", layout="wide")
 st.title("📊 Reunião de Prazos")
 
 # --- 1. CARREGAMENTO INICIAL ---
