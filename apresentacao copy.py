@@ -369,7 +369,7 @@ tab_cadastro, tab_tabelas, tab_graficos, tab_geral, tab_planejador = st.tabs([
     "📊 Tabelas", 
     "📈 Gráficos",
     "🌍 Tabela Geral",
-    "📅 Planejador"
+    "📅 Planejador (Em Desenvolvimento)"
 ])
 
 # --- ABA 1: CADASTRO ---
