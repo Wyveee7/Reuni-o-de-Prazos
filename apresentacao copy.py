@@ -406,13 +406,24 @@ tab_cadastro, tab_tabelas, tab_graficos, tab_geral, tab_planejador = st.tabs([
     "📅 Planejador (Em Desenvolvimento)"
 ])
 
-# --- ABA 1: CADASTRO (ATUALIZADO COM NOVAS COLUNAS) ---
+# --- ABA 1: CADASTRO (CORRIGIDO) ---
 with tab_cadastro:
     st.subheader("💰 1. Orçamento e Prazos da Obra")
     st.info("Cadastre o orçamento e a Data de Início + Duração (em dias) de cada etapa.")
     
-    orcamentos_filtrado = st.session_state['orcamentos'][st.session_state['orcamentos']['Obra'].isin(obras_selecionadas)]
+    # Pega os dados da memória
+    orcamentos_filtrado = st.session_state['orcamentos'][st.session_state['orcamentos']['Obra'].isin(obras_selecionadas)].copy()
     
+    # --- CORREÇÃO DE ERRO DE TIPAGEM (CRUCIAL) ---
+    # 1. Força a coluna 'Data Inicio' ser datetime. Se falhar, vira NaT (que o editor aceita como vazio)
+    orcamentos_filtrado['Data Inicio'] = pd.to_datetime(orcamentos_filtrado['Data Inicio'], errors='coerce')
+    
+    # 2. Garante que os prazos sejam numéricos (int/float) e não texto
+    cols_prazos = ["Prazo Projeto", "Prazo Fabricacao", "Prazo Montagem"]
+    for col in cols_prazos:
+        orcamentos_filtrado[col] = pd.to_numeric(orcamentos_filtrado[col], errors='coerce').fillna(0)
+    # ---------------------------------------------
+
     df_orcamentos_editado = st.data_editor(
         orcamentos_filtrado, 
         key="orcamento_editor", 
@@ -422,13 +433,18 @@ with tab_cadastro:
         column_config={
             "Orcamento": st.column_config.NumberColumn("Orçamento (Volume)", min_value=0.01, format="%.2f"),
             "Orcamento Lajes": st.column_config.NumberColumn("Orcamento Lajes", min_value=0.00, format="%.2f"),
-            # --- NOVAS COLUNAS DE PRAZO ---
+            
+            # Agora que forçamos o tipo acima, o DateColumn vai funcionar
             "Data Inicio": st.column_config.DateColumn("Data Início", format="DD/MM/YYYY"),
+            
             "Prazo Projeto": st.column_config.NumberColumn("Dias Projeto", min_value=0, step=1, help="Duração em dias corridos"),
             "Prazo Fabricacao": st.column_config.NumberColumn("Dias Fabricação", min_value=0, step=1, help="Duração em dias corridos"),
             "Prazo Montagem": st.column_config.NumberColumn("Dias Montagem", min_value=0, step=1, help="Duração em dias corridos"),
         }
     )
+    
+    # Atualiza o session_state com os dados editados
+    # Usamos o combine_first ou update para garantir que os índices batam
     st.session_state['orcamentos'].update(df_orcamentos_editado)
 
 
