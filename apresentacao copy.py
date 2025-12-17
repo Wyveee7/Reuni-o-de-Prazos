@@ -267,25 +267,38 @@ except Exception as e:
 df_base['Semana'] = pd.to_datetime(df_base['Semana'])
 
 # --- 2.5 INICIALIZAÇÃO DO SESSION STATE ---
-# (CORREÇÃO) Adicionado .tolist() para evitar erro de array do numpy
 todas_obras_lista = df_base["Obra"].unique().tolist()
 
 if 'orcamentos' not in st.session_state:
     df_orcamentos_base = pd.DataFrame({"Obra": todas_obras_lista})
+    
+    # Faz o merge com o que veio do banco de dados
     df_orcamentos_para_editor = df_orcamentos_base.merge(
         df_orcamentos_salvos, on="Obra", how="left"
     )
     
-    if 'Orcamento' not in df_orcamentos_para_editor.columns:
-        df_orcamentos_para_editor['Orcamento'] = 100.0
-    else:
-        df_orcamentos_para_editor['Orcamento'] = df_orcamentos_para_editor['Orcamento'].fillna(100.0)
-
-    if 'Orcamento Lajes' not in df_orcamentos_para_editor.columns:
-        df_orcamentos_para_editor['Orcamento Lajes'] = 0.0
-    else:
-        df_orcamentos_para_editor['Orcamento Lajes'] = df_orcamentos_para_editor['Orcamento Lajes'].fillna(0.0)
+    # --- PADRONIZAÇÃO DE VALORES PADRÃO (EXISTENTES E NOVOS) ---
+    defaults = {
+        'Orcamento': 100.0,
+        'Orcamento Lajes': 0.0,
+        'Prazo Projeto': 0,
+        'Prazo Fabricacao': 0,
+        'Prazo Montagem': 0
+    }
     
+    for col, val in defaults.items():
+        if col not in df_orcamentos_para_editor.columns:
+            df_orcamentos_para_editor[col] = val
+        else:
+            df_orcamentos_para_editor[col] = df_orcamentos_para_editor[col].fillna(val)
+
+    # Tratamento especial para data (Data Inicio)
+    if 'Data Inicio' not in df_orcamentos_para_editor.columns:
+        df_orcamentos_para_editor['Data Inicio'] = None
+    else:
+        # Garante formato datetime
+        df_orcamentos_para_editor['Data Inicio'] = pd.to_datetime(df_orcamentos_para_editor['Data Inicio'])
+
     st.session_state['orcamentos'] = df_orcamentos_para_editor
 
 # --- 3. FILTRO GLOBAL (FORA DAS ABAS) ---
@@ -406,17 +419,25 @@ tab_cadastro, tab_tabelas, tab_graficos, tab_geral, tab_planejador = st.tabs([
 
 # --- ABA 1: CADASTRO ---
 with tab_cadastro:
-    st.subheader("💰 1. Orçamento por Obra")
-    st.info("Cadastre o volume total orçado (principal e lajes) para cada obra.")
+    st.subheader("💰 1. Orçamento e Prazos da Obra")
+    st.info("Cadastre o orçamento e a Data de Início + Duração (em dias) de cada etapa.")
     
-    # Filtra os orçamentos apenas para as obras selecionadas
     orcamentos_filtrado = st.session_state['orcamentos'][st.session_state['orcamentos']['Obra'].isin(obras_selecionadas)]
     
     df_orcamentos_editado = st.data_editor(
-        orcamentos_filtrado, key="orcamento_editor", hide_index=True, width="stretch", disabled=["Obra"], 
+        orcamentos_filtrado, 
+        key="orcamento_editor", 
+        hide_index=True, 
+        width="stretch", 
+        disabled=["Obra"], 
         column_config={
-            "Orcamento": st.column_config.NumberColumn("Orçamento", min_value=0.01, format="%.2f"),
-            "Orcamento Lajes": st.column_config.NumberColumn("Orçamento Lajes", min_value=0.00, format="%.2f")
+            "Orcamento": st.column_config.NumberColumn("Orçamento (Volume)", min_value=0.01, format="%.2f"),
+            "Orcamento Lajes": st.column_config.NumberColumn("Orcamento Lajes", min_value=0.00, format="%.2f"),
+            # --- NOVAS COLUNAS ---
+            "Data Inicio": st.column_config.DateColumn("Data Início", format="DD/MM/YYYY"),
+            "Prazo Projeto": st.column_config.NumberColumn("Dias Projeto", min_value=0, step=1, help="Duração em dias corridos"),
+            "Prazo Fabricacao": st.column_config.NumberColumn("Dias Fabricação", min_value=0, step=1, help="Duração em dias corridos"),
+            "Prazo Montagem": st.column_config.NumberColumn("Dias Montagem", min_value=0, step=1, help="Duração em dias corridos"),
         }
     )
     st.session_state['orcamentos'].update(df_orcamentos_editado)
@@ -537,34 +558,73 @@ with tab_graficos:
 
 # --- ABA 4: TABELA GERAL ---
 with tab_geral:
-    st.subheader("🏗️ Resumo Geral por Obra")
+    st.subheader("🏗️ Resumo Geral e Prazos")
     try:
         df_geral = carregar_dados_gerais()
+        # Merge com os dados de orçamento e prazos
         df_geral = df_geral.merge(st.session_state['orcamentos'], on="Obra", how="left")
-        df_geral["Projetado %"] = (df_geral["Projetado"] / df_geral["Orcamento"]) * 100
-        df_geral["Fabricado %"] = (df_geral["Fabricado"] / df_geral["Orcamento"]) * 100
-        df_geral["Acabado %"] = (df_geral["Acabado"] / df_geral["Orcamento"]) * 100
-        df_geral["Expedido %"] = (df_geral["Expedido"] / df_geral["Orcamento"]) * 100
-        df_geral["Montado %"] = (df_geral["Montado"] / df_geral["Orcamento"]) * 100
 
-        colunas_geral_ordenadas = ["Obra", "Orcamento", "Orcamento Lajes", "Projetado", "Projetado %", "Taxa de Aço", "Fabricado", "Fabricado %", "Acabado", "Acabado %", "Expedido", "Expedido %", "Montado", "Montado %"]
-        colunas_finais = [col for col in colunas_geral_ordenadas if col in df_geral.columns]
-        st.dataframe(df_geral[colunas_finais], width="stretch", hide_index=True, 
-            column_config={"Orcamento": st.column_config.NumberColumn(format="%.2f"), "Projetado %": st.column_config.NumberColumn(format="%.1f%%"), "Fabricado %": st.column_config.NumberColumn(format="%.1f%%"), "Montado %": st.column_config.NumberColumn(format="%.1f%%")})
-    except Exception as e:
-        st.error(f"Erro: {e}")
+        # --- CÁLCULO DE PORCENTAGENS ---
+        cols_calc = ["Projetado", "Fabricado", "Acabado", "Expedido", "Montado"]
+        for col in cols_calc:
+            df_geral[f"{col} %"] = (df_geral[col] / df_geral["Orcamento"]) * 100
+
+        # --- CÁLCULO DE DIAS RESTANTES (LÓGICA) ---
+        hoje = pd.to_datetime(datetime.date.today())
         
-    st.markdown("---")
-    st.subheader("📦 Resumo por Família de Produto")
-    try:
-        df_familias_completo = carregar_dados_familias()
-        if not df_familias_completo.empty:
-            c1, c2 = st.columns(2)
-            with c1: obras_sel_fam = st.multiselect("Filtrar Obra:", df_familias_completo['Obra'].unique(), default=df_familias_completo['Obra'].unique(), key="fam_obra")
-            with c2: fam_sel = st.multiselect("Filtrar Família:", df_familias_completo['Familia'].unique(), default=df_familias_completo['Familia'].unique(), key="fam_fam")
-            st.dataframe(df_familias_completo[(df_familias_completo['Obra'].isin(obras_sel_fam)) & (df_familias_completo['Familia'].isin(fam_sel))], width="stretch", hide_index=True, column_config={"Volume": st.column_config.NumberColumn(format="%.3f m³"), "unidade": st.column_config.NumberColumn(format="%d Pçs")})
-        else: st.info("Sem dados.")
-    except Exception as e: st.error(f"Erro: {e}")
+        # Garante que Data Inicio é datetime
+        df_geral['Data Inicio'] = pd.to_datetime(df_geral['Data Inicio'])
+
+        def calcular_restante(row, coluna_prazo):
+            if pd.isna(row['Data Inicio']) or row[coluna_prazo] == 0:
+                return None # Não calcula se não tiver data ou prazo zerado
+            
+            data_fim_estimada = row['Data Inicio'] + pd.Timedelta(days=row[coluna_prazo])
+            dias_restantes = (data_fim_estimada - hoje).days
+            return dias_restantes
+
+        df_geral['Restante Proj'] = df_geral.apply(lambda row: calcular_restante(row, 'Prazo Projeto'), axis=1)
+        df_geral['Restante Fab'] = df_geral.apply(lambda row: calcular_restante(row, 'Prazo Fabricacao'), axis=1)
+        df_geral['Restante Mont'] = df_geral.apply(lambda row: calcular_restante(row, 'Prazo Montagem'), axis=1)
+
+        # --- ORGANIZAÇÃO DAS COLUNAS NA VISUALIZAÇÃO ---
+        # Definindo a ordem exata que você pediu
+        cols_final = [
+            "Obra", 
+            "Orcamento", 
+            "Data Inicio",
+            "Projetado %", "Restante Proj",
+            "Fabricado %", "Restante Fab",
+            "Montado %", "Restante Mont",
+            "Taxa de Aço"
+        ]
+        
+        # Filtra apenas colunas que existem (para segurança)
+        cols_existentes = [c for c in cols_final if c in df_geral.columns]
+
+        st.dataframe(
+            df_geral[cols_existentes], 
+            width="stretch", 
+            hide_index=True, 
+            column_config={
+                "Orcamento": st.column_config.NumberColumn(format="%.2f"),
+                "Data Inicio": st.column_config.DateColumn("Início Obra", format="DD/MM/YYYY"),
+                
+                # Configuração das Barras de Progresso
+                "Projetado %": st.column_config.ProgressColumn("Proj. Realizado", format="%.0f%%", min_value=0, max_value=100),
+                "Fabricado %": st.column_config.ProgressColumn("Fab. Realizado", format="%.0f%%", min_value=0, max_value=100),
+                "Montado %": st.column_config.ProgressColumn("Mont. Realizado", format="%.0f%%", min_value=0, max_value=100),
+                
+                # Configuração dos Dias Restantes
+                "Restante Proj": st.column_config.NumberColumn("⏳ Dias Proj.", format="%d dias"),
+                "Restante Fab": st.column_config.NumberColumn("⏳ Dias Fab.", format="%d dias"),
+                "Restante Mont": st.column_config.NumberColumn("⏳ Dias Mont.", format="%d dias"),
+                
+                "Taxa de Aço": st.column_config.NumberColumn(format="%.2f kg/m³")
+            }
+        )
+    except Exception as e:
+        st.error(f"Erro ao gerar tabela geral: {e}")
 
 # --- ABA 5: PLANEJADOR ---
 with tab_planejador:
