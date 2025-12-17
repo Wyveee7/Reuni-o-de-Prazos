@@ -313,31 +313,57 @@ tab_cadastro, tab_tabelas, tab_graficos, tab_geral, tab_planejador = st.tabs([
     "📁 Cadastro", "📊 Tabelas", "📈 Gráficos", "🌍 Tabela Geral", "📅 Planejador"
 ])
 
-# --- ABA 1: CADASTRO (LIMPO E OTIMIZADO) ---
+# --- ABA 1: CADASTRO (COM CALLBACK PARA CORRIGIR O BUG DO "VALOR SUMINDO") ---
 with tab_cadastro:
     st.subheader("💰 1. Orçamento e Datas das Etapas")
     st.info("Cadastre o orçamento e as datas de **Início e Fim** de cada etapa.")
     
-    # 1. Copia e filtra os dados da memória
+    # 1. Preparação dos dados (Criação de cópia segura mantendo o índice original)
+    # É fundamental manter o índice para sabermos qual linha atualizar depois
     orcamentos_filtrado = st.session_state['orcamentos'][st.session_state['orcamentos']['Obra'].isin(obras_selecionadas)].copy()
     
-    # 2. Conversão de tipos (Blindagem)
-    for col in cols_datas_necessarias:
+    # 2. Conversão de tipos (Garante que o editor receba datas e não texto)
+    cols_datas = ["Ini Projeto", "Fim Projeto", "Ini Fabricacao", "Fim Fabricacao", "Ini Montagem", "Fim Montagem"]
+    for col in cols_datas:
         if col not in orcamentos_filtrado.columns: orcamentos_filtrado[col] = None
         orcamentos_filtrado[col] = pd.to_datetime(orcamentos_filtrado[col], errors='coerce')
 
-    # 3. O Editor de Dados
-    df_orcamentos_editado = st.data_editor(
+    # --- O SEGREDO DO SUCESSO: CALLBACK ---
+    # Esta função roda ANTES da página recarregar, salvando o dado na hora que você digita.
+    def atualizar_session_state():
+        # Pega as alterações feitas no editor (que ficam num estado temporário do Streamlit)
+        edits = st.session_state["editor_cadastro"]
+        
+        # Se houver linhas editadas
+        if edits["edited_rows"]:
+            for index, changes in edits["edited_rows"].items():
+                # O índice aqui é posicional (0, 1, 2 da tabela filtrada)
+                # Precisamos pegar o índice REAL do dataframe original
+                # Felizmente, o session_state['editor_cadastro'] mapeia corretamente se usarmos a lógica abaixo:
+                
+                # Recupera o índice real do dataframe filtrado que está na tela
+                real_index = orcamentos_filtrado.index[index]
+                
+                # Aplica cada mudança diretamente na memória principal (st.session_state['orcamentos'])
+                for col_name, new_value in changes.items():
+                    st.session_state['orcamentos'].at[real_index, col_name] = new_value
+
+    # 3. O Editor de Dados Configurado
+    # Note o uso de `key` e `on_change`
+    st.data_editor(
         orcamentos_filtrado, 
-        key="orcamento_editor", 
+        key="editor_cadastro",  # Identificador único para o callback funcionar
+        on_change=atualizar_session_state, # Chama a função acima assim que você edita
         hide_index=True, 
-        width="stretch", 
+        width=None, # Stretch automático
+        use_container_width=True,
         disabled=["Obra"], 
         column_config={
+            "Obra": st.column_config.TextColumn("Obra", disabled=True),
             "Orcamento": st.column_config.NumberColumn("Orçamento (Vol)", min_value=0.01, format="%.2f"),
             "Orcamento Lajes": st.column_config.NumberColumn("Orç. Lajes", min_value=0.00, format="%.2f"),
             
-            # DATAS POR ETAPA (INICIO E FIM)
+            # DATAS POR ETAPA
             "Ini Projeto": st.column_config.DateColumn("Ini Proj.", format="DD/MM/YYYY"),
             "Fim Projeto": st.column_config.DateColumn("Fim Proj.", format="DD/MM/YYYY"),
             
@@ -346,27 +372,11 @@ with tab_cadastro:
             
             "Ini Montagem": st.column_config.DateColumn("Ini Mont.", format="DD/MM/YYYY"),
             "Fim Montagem": st.column_config.DateColumn("Fim Mont.", format="DD/MM/YYYY"),
+            
+            # Ocultar Data Inicio Genérica se existir
+            "Data Inicio": None
         }
     )
-    
-    # --- CORREÇÃO PARA NÃO PERDER DADOS (USANDO .LOC) ---
-    if not df_orcamentos_editado.empty:
-        st.session_state['orcamentos'].loc[
-            df_orcamentos_editado.index, 
-            df_orcamentos_editado.columns
-        ] = df_orcamentos_editado
-
-# --- 6. MERGE FINAL ---
-df_orcamentos_atual = st.session_state['orcamentos']
-df = df.merge(df_orcamentos_atual, on="Obra", how="left")
-for col in ["Projetado", "Fabricado", "Montado"]:
-    df[f"{col} %"] = (df[f"Volume_{col}"] / df["Orcamento"]) * 100
-
-if not df_previsoes_salvas.empty:
-    df = df.merge(df_previsoes_salvas, on=["Obra", "Semana"], how="left")
-for col in ["Projeto Previsto %", "Fabricação Prevista %", "Montagem Prevista %"]:
-    df[col] = df[col].fillna(0.0)
-df_para_edicao = df.copy() 
 
 # --- ABA 2: TABELAS ---
 with tab_tabelas:
