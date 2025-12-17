@@ -557,89 +557,85 @@ with tab_graficos:
         st.info("Gráfico não disponível.")
 
 # --- ABA 4: TABELA GERAL ---
-# --- ABA 4: TABELA GERAL ---
 with tab_geral:
     st.subheader("🏗️ Resumo Geral e Prazos")
     try:
         df_geral = carregar_dados_gerais()
         
-        # Pega os orçamentos da memória
-        df_orcamentos_clean = st.session_state['orcamentos'].copy()
+        # 1. PEGAR ORÇAMENTOS E GARANTIR QUE NÃO HAJA DUPLICATAS
+        # Isso evita o erro de criar listas dentro das células
+        df_orcamentos_clean = st.session_state['orcamentos'].drop_duplicates(subset=['Obra'], keep='first')
         
-        # --- BLINDAGEM CONTRA DUPLICATAS ---
-        # Garante que temos apenas uma linha por Obra para não duplicar no merge
-        df_orcamentos_clean = df_orcamentos_clean.drop_duplicates(subset=['Obra'], keep='first')
-
         # Merge com os dados de orçamento e prazos
         df_geral = df_geral.merge(df_orcamentos_clean, on="Obra", how="left")
 
-        # --- CÁLCULO DE PORCENTAGENS ---
+        # 2. CÁLCULO DE PORCENTAGENS
         cols_calc = ["Projetado", "Fabricado", "Acabado", "Expedido", "Montado"]
         for col in cols_calc:
-            # Preenche 0 se estiver vazio para evitar erros de cálculo
             df_geral[col] = df_geral[col].fillna(0)
             df_geral[f"{col} %"] = (df_geral[col] / df_geral["Orcamento"]) * 100
 
-        # --- CORREÇÃO DO ERRO DE DATA (BLINDAGEM) ---
-        # 1. Força conversão para string primeiro (resolve o problema se houver listas)
-        df_geral['Data Inicio'] = df_geral['Data Inicio'].astype(str)
-        
-        # 2. Remove caracteres estranhos de listas como '[' ou ']' se existirem
-        df_geral['Data Inicio'] = df_geral['Data Inicio'].str.replace(r'[\[\]\']', '', regex=True)
-        
-        # 3. Substitui 'NaT', 'nan', 'None' por vazio
-        df_geral['Data Inicio'] = df_geral['Data Inicio'].replace({'NaT': None, 'nan': None, 'None': None, '': None})
-
-        # 4. Agora sim converte para datetime com segurança (errors='coerce' transforma erros em NaT sem travar)
+        # 3. CORREÇÃO ROBUSTA DE DATA (RESOLVE O ERRO <class 'list'>)
+        # Força conversão para string, limpa caracteres de lista e converte para data
+        df_geral['Data Inicio'] = df_geral['Data Inicio'].astype(str).str.replace(r'[\[\]\']', '', regex=True)
         df_geral['Data Inicio'] = pd.to_datetime(df_geral['Data Inicio'], errors='coerce')
 
-        # --- CÁLCULO DE DIAS RESTANTES ---
+        # 4. CÁLCULO DE DIAS RESTANTES
         hoje = pd.to_datetime(datetime.date.today())
 
         def calcular_restante(row, coluna_prazo):
-            # Se a data for inválida (NaT) ou prazo for 0/Nulo, retorna None
+            # Se não tiver data ou prazo, retorna vazio
             if pd.isna(row['Data Inicio']) or pd.isna(row[coluna_prazo]) or row[coluna_prazo] == 0:
                 return None
-            
             try:
-                data_fim_estimada = row['Data Inicio'] + pd.Timedelta(days=int(row[coluna_prazo]))
-                dias_restantes = (data_fim_estimada - hoje).days
-                return dias_restantes
+                # Data estimada de fim = Inicio + Prazo em dias
+                data_fim = row['Data Inicio'] + pd.Timedelta(days=int(row[coluna_prazo]))
+                return (data_fim - hoje).days
             except:
                 return None
 
-        # Aplica o cálculo
         df_geral['Restante Proj'] = df_geral.apply(lambda row: calcular_restante(row, 'Prazo Projeto'), axis=1)
         df_geral['Restante Fab'] = df_geral.apply(lambda row: calcular_restante(row, 'Prazo Fabricacao'), axis=1)
         df_geral['Restante Mont'] = df_geral.apply(lambda row: calcular_restante(row, 'Prazo Montagem'), axis=1)
 
-        # --- ORGANIZAÇÃO DAS COLUNAS ---
-        cols_final = [
+        # 5. ORGANIZAÇÃO DAS COLUNAS (LADO A LADO)
+        # Aqui definimos a ordem exata de exibição
+        colunas_ordenadas = [
             "Obra", 
             "Orcamento", 
             "Data Inicio",
+            # Setor Projeto
             "Projetado %", "Restante Proj",
+            # Setor Fabricação
             "Fabricado %", "Restante Fab",
+            # Setor Montagem
             "Montado %", "Restante Mont",
+            # Outros
             "Taxa de Aço"
         ]
         
-        cols_existentes = [c for c in cols_final if c in df_geral.columns]
+        # Filtra apenas as que existem no dataframe para evitar erro de coluna inexistente
+        cols_final = [c for c in colunas_ordenadas if c in df_geral.columns]
 
         st.dataframe(
-            df_geral[cols_existentes], 
+            df_geral[cols_final], 
             width="stretch", 
             hide_index=True, 
             column_config={
                 "Orcamento": st.column_config.NumberColumn(format="%.2f"),
-                "Data Inicio": st.column_config.DateColumn("Início Obra", format="DD/MM/YYYY"),
-                "Projetado %": st.column_config.ProgressColumn("Proj. Realizado", format="%.0f%%", min_value=0, max_value=100),
-                "Fabricado %": st.column_config.ProgressColumn("Fab. Realizado", format="%.0f%%", min_value=0, max_value=100),
-                "Montado %": st.column_config.ProgressColumn("Mont. Realizado", format="%.0f%%", min_value=0, max_value=100),
-                "Restante Proj": st.column_config.NumberColumn("⏳ Dias Proj.", format="%d dias"),
-                "Restante Fab": st.column_config.NumberColumn("⏳ Dias Fab.", format="%d dias"),
-                "Restante Mont": st.column_config.NumberColumn("⏳ Dias Mont.", format="%d dias"),
-                "Taxa de Aço": st.column_config.NumberColumn(format="%.2f kg/m³")
+                "Data Inicio": st.column_config.DateColumn("Início", format="DD/MM/YYYY"),
+                
+                # Configuração Visual: Barra de Progresso + Número de Dias
+                "Projetado %": st.column_config.ProgressColumn("Proj. %", format="%.0f%%", min_value=0, max_value=100),
+                "Restante Proj": st.column_config.NumberColumn("Faltam (Dias)", format="%d d"),
+                
+                "Fabricado %": st.column_config.ProgressColumn("Fab. %", format="%.0f%%", min_value=0, max_value=100),
+                "Restante Fab": st.column_config.NumberColumn("Faltam (Dias)", format="%d d"),
+                
+                "Montado %": st.column_config.ProgressColumn("Mont. %", format="%.0f%%", min_value=0, max_value=100),
+                "Restante Mont": st.column_config.NumberColumn("Faltam (Dias)", format="%d d"),
+                
+                "Taxa de Aço": st.column_config.NumberColumn("Aço (kg/m³)", format="%.2f")
             }
         )
     except Exception as e:
