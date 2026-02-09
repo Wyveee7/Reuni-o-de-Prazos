@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 import altair as alt
 import datetime
 import numpy as np
+import requests
 
 # ========================================================
 #          CONFIGURAÇÕES DO BANCO DE DADOS
@@ -191,6 +192,20 @@ def formatar_semana(date):
     return f"{start_str} á {end_str} ({date.strftime('%Y')})"
 
 # ========================================================
+# FUNÇÃO PARA BUSCAR DADOS DO WAR ROOM (API)
+# ========================================================
+WAR_ROOM_URL = "https://war-room-vejv.vercel.app/api/war-room"
+
+@st.cache_data(ttl=10)
+def carregar_war_room():
+    resp = requests.get(WAR_ROOM_URL, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, list):
+        raise ValueError("Resposta inesperada da API War Room.")
+    return data
+
+# ========================================================
 # FUNÇÃO PARA SALVAR DADOS NO MYSQL
 # ========================================================
 def salvar_dados_usuario(df_previsoes, df_orcamentos):
@@ -310,8 +325,8 @@ if df.empty and not obras_selecionadas:
 df['Semana_Display'] = df['Semana'].apply(formatar_semana)
     
 # --- 5. ABAS ---
-tab_cadastro, tab_tabelas, tab_graficos, tab_geral, tab_planejador = st.tabs([
-    "📁 Cadastro", "📊 Tabelas", "📈 Gráficos", "🌍 Tabela Geral", "📅 Planejador"
+tab_cadastro, tab_tabelas, tab_graficos, tab_geral, tab_planejador, tab_warroom = st.tabs([
+    "📁 Cadastro", "📊 Tabelas", "📈 Gráficos", "🌍 Tabela Geral", "📅 Planejador", "🏗️ War Room"
 ])
 
 # --- ABA 1: CADASTRO (COM CORREÇÃO DE WIDTH E CALLBACK) ---
@@ -619,3 +634,71 @@ with tab_planejador:
                 st.warning("Não foi possível gerar cronograma.")
         except Exception as e:
             st.error(f"Erro: {e}")
+
+# --- ABA 6: WAR ROOM ---
+with tab_warroom:
+    st.subheader("🏗️ War Room Produção")
+    st.caption(f"Data: {datetime.date.today().strftime('%d/%m/%Y')} | Fonte: API War Room")
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("🔄 Atualizar agora", key="btn_war_room_refresh"):
+            carregar_war_room.clear()
+            st.experimental_rerun()
+    with c2:
+        st.write("")
+
+    try:
+        data_wr = carregar_war_room()
+        now = datetime.datetime.now()
+        current_hour = now.hour
+
+        def fmt(val, qtd, unit):
+            if (val == 0 and qtd == 0) or val is None:
+                return "-"
+            n = f"{val:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            if unit == "kg": return f"{n} kg"
+            if unit == "carga": return f"{qtd} cgs"
+            if unit == "kg_pc": return f"{n} kg | {qtd} pç"
+            if unit == "vol_pc": return f"{n} m³ | {qtd} pç"
+            return f"{n}"
+
+        def get_active_column():
+            if current_hour < 8: return "Hoje 8h"
+            if 8 <= current_hour < 13: return "Hoje 13h"
+            return "Hoje 18h"
+
+        active_col = get_active_column()
+
+        rows = []
+        meta_batida = []
+        for r in data_wr:
+            rows.append({
+                "Setor": r.get("setor", ""),
+                "Hoje Prog": fmt(r.get("progHoje", 0), r.get("qProgHoje", 0), r.get("unidade", "")),
+                "Hoje 8h": fmt(r.get("realHoje8h", 0), r.get("qReal8h", 0), r.get("unidade", "")),
+                "Hoje 13h": fmt(r.get("realHoje13h", 0), r.get("qReal13h", 0), r.get("unidade", "")),
+                "Hoje 18h": fmt(r.get("realHoje18h", 0), r.get("qReal18h", 0), r.get("unidade", "")),
+                "Ontem Prog": fmt(r.get("progOntem", 0), r.get("qProgOntem", 0), r.get("unidade", "")),
+                "Ontem Real": fmt(r.get("realOntem", 0), r.get("qRealOntem", 0), r.get("unidade", "")),
+                "Amanhã Prog": fmt(r.get("progAmanha", 0), r.get("qProgAmanha", 0), r.get("unidade", "")),
+            })
+            meta_batida.append((r.get("realOntem", 0) or 0) >= (r.get("progOntem", 0) or 0))
+
+        df_wr = pd.DataFrame(rows)
+
+        def style_row(row):
+            styles = [""] * len(df_wr.columns)
+            # Coluna ativa (hora)
+            if active_col in df_wr.columns:
+                idx = df_wr.columns.get_loc(active_col)
+                styles[idx] = "background-color:#fee2e2; color:#b91c1c; font-weight:700"
+            # Ontem Real (meta batida)
+            idx_ontem = df_wr.columns.get_loc("Ontem Real")
+            styles[idx_ontem] = "color:#16a34a; font-weight:700" if meta_batida[row.name] else "color:#dc2626; font-weight:700"
+            return styles
+
+        st.dataframe(df_wr.style.apply(style_row, axis=1), use_container_width=True, hide_index=True)
+        st.caption(f"Atualizado em: {now.strftime('%H:%M:%S')}")
+    except Exception as e:
+        st.error(f"Erro ao carregar War Room: {e}")
