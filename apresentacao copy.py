@@ -206,6 +206,20 @@ def carregar_war_room():
     return data
 
 # ========================================================
+# FUNÇÃO PARA BUSCAR DADOS DO WAR ROOM SEMANAL (API)
+# ========================================================
+WAR_ROOM_WEEK_URL = "https://war-room-vejv.vercel.app/api/war-room-week"
+
+@st.cache_data(ttl=300)
+def carregar_war_room_week():
+    resp = requests.get(WAR_ROOM_WEEK_URL, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, list):
+        raise ValueError("Resposta inesperada da API War Room Week.")
+    return data
+
+# ========================================================
 # FUNÇÃO PARA SALVAR DADOS NO MYSQL
 # ========================================================
 def salvar_dados_usuario(df_previsoes, df_orcamentos):
@@ -526,6 +540,26 @@ with tab_geral:
                 "Expedido %": st.column_config.NumberColumn("Exp. %", format="%.1f%%"),
             }
         )
+        st.markdown('---')
+        st.subheader('📅 War Room Semanal')
+        try:
+            data_week = carregar_war_room_week()
+            if data_week:
+                df_week = pd.DataFrame(data_week)
+                needed = {'inicio','fim','setor','total_programado','total_realizado'}
+                if needed.issubset(df_week.columns):
+                    df_week['Datas'] = pd.to_datetime(df_week['inicio']).dt.strftime('%d/%m') + ' a ' + pd.to_datetime(df_week['fim']).dt.strftime('%d/%m')
+                    df_week = df_week[['Datas','setor','total_programado','total_realizado']].rename(columns={
+                        'setor': 'Setor',
+                        'total_programado': 'Total Programado',
+                        'total_realizado': 'Total Realizado',
+                    })
+                st.dataframe(df_week, use_container_width=True, hide_index=True)
+            else:
+                st.info('Sem dados semanais.')
+        except Exception as e:
+            st.error(f'Erro ao carregar War Room Semanal: {e}')
+
     except Exception as e:
         st.error(f"Erro ao gerar tabela: {e}")
 
