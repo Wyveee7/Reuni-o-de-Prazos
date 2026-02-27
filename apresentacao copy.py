@@ -451,19 +451,125 @@ with tab_tabelas:
         cols_res = ["Obra", "Semana_Display", "Projetado %", "Projeto Previsto %", "Fabricado %", "Fabricação Prevista %", "Montado %", "Montagem Prevista %"]
         st.dataframe(df_calculado[[c for c in cols_res if c in df_calculado.columns]], use_container_width=True, hide_index=True)
 
-# --- ABA 3: GRÁFICOS ---
+# --- ABA 3: GRÁFICOS (MODO SLIDESHOW) ---
 with tab_graficos:
-    st.subheader("📈 Tendências")
-    if not df_calculado.empty:
-        df_melt = df_calculado.melt(id_vars=["Obra", "Semana_Display", "Semana"], 
-                                    value_vars=[c for c in ["Projetado %", "Projeto Previsto %", "Fabricado %", "Fabricação Prevista %", "Montado %", "Montagem Prevista %"] if c in df_calculado.columns],
-                                    var_name="Métrica", value_name="Porcentagem")
-        chart = alt.Chart(df_melt).mark_line(point=True).encode(
-            x=alt.X('Semana_Display:N', sort=alt.SortField(field="Semana", order='ascending'), title='Semana'),
-            y='Porcentagem:Q', color='Métrica:N', strokeDash='Obra:N', tooltip=['Obra', 'Semana_Display', 'Métrica', alt.Tooltip('Porcentagem', format='.1f')]
-        ).interactive()
-        st.altair_chart(chart, use_container_width=True)
+    st.subheader("📈 Tendências e Resumo por Obra")
 
+    if not obras_selecionadas:
+        st.warning("⚠️ Selecione pelo menos uma obra no filtro global acima.")
+    elif df_calculado.empty:
+        st.warning("Nenhum dado calculado para as obras selecionadas.")
+    else:
+        # 1. INICIALIZA O ESTADO DO SLIDE
+        if 'slide_index' not in st.session_state:
+            st.session_state.slide_index = 0
+
+        # Garantia de segurança: se o usuário mudar o filtro global e o array diminuir
+        if st.session_state.slide_index >= len(obras_selecionadas):
+            st.session_state.slide_index = 0
+
+        # 2. CONTROLES DE NAVEGAÇÃO (Botões)
+        col_prev, col_title, col_next = st.columns([1, 4, 1])
+        
+        with col_prev:
+            if st.button("⬅️ Obra Anterior", use_container_width=True):
+                # O módulo (%) faz o carrossel dar a volta quando chega no início
+                st.session_state.slide_index = (st.session_state.slide_index - 1) % len(obras_selecionadas)
+                
+        with col_title:
+            obra_atual = obras_selecionadas[st.session_state.slide_index]
+            st.markdown(f"<h3 style='text-align: center; color: #1f77b4;'>{obra_atual}</h3>", unsafe_allow_html=True)
+            st.markdown(f"<p style='text-align: center;'>Mostrando obra <b>{st.session_state.slide_index + 1}</b> de <b>{len(obras_selecionadas)}</b></p>", unsafe_allow_html=True)
+            
+        with col_next:
+            if st.button("Próxima Obra ➡️", use_container_width=True):
+                # O módulo (%) faz o carrossel dar a volta quando chega no fim
+                st.session_state.slide_index = (st.session_state.slide_index + 1) % len(obras_selecionadas)
+
+        st.markdown("---")
+
+        # 3. RENDERIZAÇÃO DO GRÁFICO (Filtrado apenas para a obra atual)
+        df_obra_chart = df_calculado[df_calculado["Obra"] == obra_atual]
+        
+        if not df_obra_chart.empty:
+            df_melt = df_obra_chart.melt(
+                id_vars=["Obra", "Semana_Display", "Semana"], 
+                value_vars=[c for c in ["Projetado %", "Projeto Previsto %", "Fabricado %", "Fabricação Prevista %", "Montado %", "Montagem Prevista %"] if c in df_obra_chart.columns],
+                var_name="Métrica", 
+                value_name="Porcentagem"
+            )
+            chart = alt.Chart(df_melt).mark_line(point=True, strokeWidth=3).encode(
+                x=alt.X('Semana_Display:N', sort=alt.SortField(field="Semana", order='ascending'), title='Semana'),
+                y=alt.Y('Porcentagem:Q', title='Avanço (%)'), 
+                color=alt.Color('Métrica:N', scale=alt.Scale(scheme='category10')), 
+                strokeDash=alt.condition(
+                    alt.datum.Métrica.contains('Previst'), 
+                    alt.value([5, 5]), # Linha tracejada para previsões
+                    alt.value([0])     # Linha contínua para o realizado
+                ),
+                tooltip=['Obra', 'Semana_Display', 'Métrica', alt.Tooltip('Porcentagem', format='.1f')]
+            ).properties(height=350).interactive()
+            
+            st.altair_chart(chart, use_container_width=True)
+
+        # 4. RENDERIZAÇÃO DA TABELA GERAL (Específica da obra atual)
+        st.subheader("📋 Resumo Consolidado da Obra")
+        
+        # Como as funções de banco de dados tem cache (@st.cache_data), não há problema em chamar de novo
+        df_geral_slide = carregar_dados_gerais()
+        df_orc_slide = st.session_state['orcamentos'].drop_duplicates(subset=['Obra'], keep='first')
+        
+        # Filtra apenas a obra atual ANTES de fazer os cálculos pesados
+        df_geral_slide = df_geral_slide[df_geral_slide["Obra"] == obra_atual].copy()
+        
+        if not df_geral_slide.empty:
+            df_geral_slide = df_geral_slide.merge(df_orc_slide, on="Obra", how="left")
+            
+            # Repete a lógica de cálculos da tabela geral para esta linha
+            cols_num = ["Orcamento", "Orcamento Lajes", "Projetado", "Fabricado", "Acabado", "Expedido", "Montado"]
+            for col in cols_num: 
+                if col in df_geral_slide.columns: df_geral_slide[col] = df_geral_slide[col].fillna(0.0)
+
+            for etapa in ["Projetado", "Fabricado", "Acabado", "Expedido", "Montado"]:
+                df_geral_slide[f"{etapa} %"] = df_geral_slide.apply(lambda r: (r[etapa]/r["Orcamento"]*100) if r.get("Orcamento", 0) > 0 else 0, axis=1)
+
+            hoje = pd.to_datetime(datetime.date.today())
+            for col in ["Fim Projeto", "Fim Fabricacao", "Fim Montagem"]:
+                if col not in df_geral_slide.columns: df_geral_slide[col] = None
+                df_geral_slide[col] = pd.to_datetime(df_geral_slide[col], errors='coerce')
+
+            df_geral_slide['Saldo Proj'] = df_geral_slide.apply(lambda r: (r['Fim Projeto'] - hoje).days if pd.notna(r['Fim Projeto']) else None, axis=1)
+            df_geral_slide['Saldo Fab']  = df_geral_slide.apply(lambda r: (r['Fim Fabricacao'] - hoje).days if pd.notna(r['Fim Fabricacao']) else None, axis=1)
+            df_geral_slide['Saldo Mont'] = df_geral_slide.apply(lambda r: (r['Fim Montagem'] - hoje).days if pd.notna(r['Fim Montagem']) else None, axis=1)
+
+            cols_final = [c for c in [
+                "Obra", "Orcamento", "Orcamento Lajes", "Projetado", "Projetado %", "Saldo Proj",
+                "Taxa de Aço", "Fabricado", "Fabricado %", "Saldo Fab", "Acabado", "Acabado %",
+                "Expedido", "Expedido %", "Montado", "Montado %", "Saldo Mont"
+            ] if c in df_geral_slide.columns]
+
+            # Reutiliza o mesmo column_config da Aba 4
+            st.dataframe(
+                df_geral_slide[cols_final], use_container_width=True, hide_index=True,
+                column_config={
+                    "Orcamento": st.column_config.NumberColumn("Orçamento", format="%.2f"),
+                    "Orcamento Lajes": st.column_config.NumberColumn("Orç. Lajes", format="%.2f"),
+                    "Taxa de Aço": st.column_config.NumberColumn("Aço (kg/m³)", format="%.2f"),
+                    "Projetado": st.column_config.NumberColumn("Vol. Proj.", format="%.2f"),
+                    "Projetado %": st.column_config.NumberColumn("Proj. %", format="%.1f%%"), 
+                    "Saldo Proj": st.column_config.NumberColumn("⏳ Dias", format="%d d"),
+                    "Fabricado": st.column_config.NumberColumn("Vol. Fab.", format="%.2f"),
+                    "Fabricado %": st.column_config.NumberColumn("Fab. %", format="%.1f%%"),
+                    "Saldo Fab": st.column_config.NumberColumn("⏳ Dias", format="%d d"),
+                    "Montado": st.column_config.NumberColumn("Vol. Mont.", format="%.2f"),
+                    "Montado %": st.column_config.NumberColumn("Mont. %", format="%.1f%%"),
+                    "Saldo Mont": st.column_config.NumberColumn("⏳ Dias", format="%d d"),
+                    "Acabado": st.column_config.NumberColumn("Vol. Acab.", format="%.2f"),
+                    "Acabado %": st.column_config.NumberColumn("Acab. %", format="%.1f%%"),
+                    "Expedido": st.column_config.NumberColumn("Vol. Exp.", format="%.2f"),
+                    "Expedido %": st.column_config.NumberColumn("Exp. %", format="%.1f%%"),
+                }
+            )
 # --- ABA 4: TABELA GERAL (VISÃO DETALHADA + SALDO DIAS) ---
 with tab_geral:
     st.subheader("🏗️ Resumo Geral Detalhado")
