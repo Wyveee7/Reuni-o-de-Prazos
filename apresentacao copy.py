@@ -8,7 +8,7 @@ import numpy as np
 import requests
 
 # ========================================================
-#          CONFIGURAÇÕES DO BANCO DE DADOS
+#           CONFIGURAÇÕES DO BANCO DE DADOS
 # ========================================================
 DB_CONFIG = {
     "host": st.secrets["db_host"],
@@ -118,15 +118,16 @@ def carregar_dados_familias():
 @st.cache_data(ttl=300)
 def carregar_datas_limite_etapas(obra_nome):
     conn = mysql.connector.connect(**DB_CONFIG)
-    query = f"""
+    # Correção de segurança: Uso de bind parameters (%s) para evitar SQL Injection
+    query = """
         SELECT 
             MIN(data_Projeto) as ini_proj, MAX(data_Projeto) as fim_proj,
             MIN(data_Acabamento) as ini_fab, MAX(data_Acabamento) as fim_fab,
             MIN(dataMontada) as ini_mont, MAX(dataMontada) as fim_mont
         FROM `plannix-db`.`plannix`
-        WHERE nomeObra = '{obra_nome}'
+        WHERE nomeObra = %s
     """
-    df = pd.read_sql(query, conn)
+    df = pd.read_sql(query, conn, params=(obra_nome,))
     conn.close()
     return df
 
@@ -166,7 +167,6 @@ def carregar_dados_usuario():
     try:
         df_orcamentos_salvos = pd.read_sql("SELECT * FROM orcamentos_usuario", con=engine)
     except:
-        # Tabela ainda não existe, será criada depois
         pass
     
     try:
@@ -343,7 +343,7 @@ tab_cadastro, tab_tabelas, tab_graficos, tab_geral, tab_planejador, tab_warroom 
     "📁 Cadastro", "📊 Tabelas", "📈 Gráficos", "🌍 Tabela Geral", "📅 Planejador", "🏗️ War Room"
 ])
 
-# --- ABA 1: CADASTRO (COM CORREÇÃO DE WIDTH E CALLBACK) ---
+# --- ABA 1: CADASTRO ---
 with tab_cadastro:
     st.subheader("💰 1. Orçamento e Datas das Etapas")
     st.info("Cadastre o orçamento e as datas de **Início e Fim** de cada etapa.")
@@ -361,41 +361,33 @@ with tab_cadastro:
         edits = st.session_state["editor_cadastro"]
         if edits["edited_rows"]:
             for index, changes in edits["edited_rows"].items():
-                # Recupera o índice real
                 real_index = orcamentos_filtrado.index[index]
-                # Aplica mudanças
                 for col_name, new_value in changes.items():
                     st.session_state['orcamentos'].at[real_index, col_name] = new_value
 
     # 3. O Editor de Dados
     st.data_editor(
         orcamentos_filtrado, 
-        key="editor_cadastro", # Chave para o callback
-        on_change=atualizar_session_state, # Ativa o salvamento imediato
+        key="editor_cadastro",
+        on_change=atualizar_session_state,
         hide_index=True, 
-        use_container_width=True, # Substitui o width=None
+        use_container_width=True,
         disabled=["Obra"], 
         column_config={
             "Obra": st.column_config.TextColumn("Obra", disabled=True),
             "Orcamento": st.column_config.NumberColumn("Orçamento (Vol)", min_value=0.01, format="%.2f"),
             "Orcamento Lajes": st.column_config.NumberColumn("Orç. Lajes", min_value=0.00, format="%.2f"),
             
-            # DATAS POR ETAPA (INICIO E FIM)
             "Ini Projeto": st.column_config.DateColumn("Ini Proj.", format="DD/MM/YYYY"),
             "Fim Projeto": st.column_config.DateColumn("Fim Proj.", format="DD/MM/YYYY"),
-            
             "Ini Fabricacao": st.column_config.DateColumn("Ini Fab.", format="DD/MM/YYYY"),
             "Fim Fabricacao": st.column_config.DateColumn("Fim Fab.", format="DD/MM/YYYY"),
-            
             "Ini Montagem": st.column_config.DateColumn("Ini Mont.", format="DD/MM/YYYY"),
             "Fim Montagem": st.column_config.DateColumn("Fim Mont.", format="DD/MM/YYYY"),
-            
-            # Ocultar
             "Data Inicio": None
         }
     )
     
-    # Botão de Salvar apenas para o Banco de Dados
     if st.button("💾 Salvar Cadastro no Banco de Dados", key="btn_salvar_cadastro"):
         salvar_dados_usuario(df_previsoes_salvas, st.session_state['orcamentos'])
 
@@ -422,7 +414,6 @@ with tab_tabelas:
     if show_editor:
         st.markdown("---")
         st.subheader("✏️ 2. Edite as Previsões Semanais")
-        # Esconde colunas que não são de previsão
         cols_ocultar = ["Obra", "Semana", "Semana_Display", "Volume_Projetado", "Projetado %", "Volume_Fabricado", "Fabricado %", "Volume_Montado", "Montado %", "Orcamento", "Orcamento Lajes"] + cols_datas_necessarias
         
         df_editado = st.data_editor(
@@ -436,7 +427,6 @@ with tab_tabelas:
         )
         st.markdown("---")
 
-    # Lógica de Corte
     df_calculado = df_editado.copy().sort_values(['Obra', 'Semana'])
     for col in ["Projeto Previsto %", "Fabricação Prevista %", "Montagem Prevista %"]:
         df_calculado[col] = df_calculado[col].replace(0.0, np.nan)
@@ -451,7 +441,7 @@ with tab_tabelas:
         cols_res = ["Obra", "Semana_Display", "Projetado %", "Projeto Previsto %", "Fabricado %", "Fabricação Prevista %", "Montado %", "Montagem Prevista %"]
         st.dataframe(df_calculado[[c for c in cols_res if c in df_calculado.columns]], use_container_width=True, hide_index=True)
 
-# --- ABA 3: GRÁFICOS (MODO SLIDESHOW) ---
+# --- ABA 3: GRÁFICOS (MODO SLIDESHOW CORRIGIDO) ---
 with tab_graficos:
     st.subheader("📈 Tendências e Resumo por Obra")
 
@@ -464,16 +454,15 @@ with tab_graficos:
         if 'slide_index' not in st.session_state:
             st.session_state.slide_index = 0
 
-        # Garantia de segurança: se o usuário mudar o filtro global e o array diminuir
+        # Garantia de segurança se o array diminuir
         if st.session_state.slide_index >= len(obras_selecionadas):
             st.session_state.slide_index = 0
 
-        # 2. CONTROLES DE NAVEGAÇÃO (Botões)
+        # 2. CONTROLES DE NAVEGAÇÃO
         col_prev, col_title, col_next = st.columns([1, 4, 1])
         
         with col_prev:
             if st.button("⬅️ Obra Anterior", use_container_width=True):
-                # O módulo (%) faz o carrossel dar a volta quando chega no início
                 st.session_state.slide_index = (st.session_state.slide_index - 1) % len(obras_selecionadas)
                 
         with col_title:
@@ -483,31 +472,36 @@ with tab_graficos:
             
         with col_next:
             if st.button("Próxima Obra ➡️", use_container_width=True):
-                # O módulo (%) faz o carrossel dar a volta quando chega no fim
                 st.session_state.slide_index = (st.session_state.slide_index + 1) % len(obras_selecionadas)
 
         st.markdown("---")
 
-        # 3. RENDERIZAÇÃO DO GRÁFICO (Filtrado apenas para a obra atual)
+        # 3. RENDERIZAÇÃO DO GRÁFICO 
         df_obra_chart = df_calculado[df_calculado["Obra"] == obra_atual]
         
         if not df_obra_chart.empty:
             df_melt = df_obra_chart.melt(
                 id_vars=["Obra", "Semana_Display", "Semana"], 
                 value_vars=[c for c in ["Projetado %", "Projeto Previsto %", "Fabricado %", "Fabricação Prevista %", "Montado %", "Montagem Prevista %"] if c in df_obra_chart.columns],
-                var_name="Métrica", 
+                var_name="Metrica", # NOME SEM ACENTO PARA NÃO QUEBRAR O ALTAIR
                 value_name="Porcentagem"
             )
+            
             chart = alt.Chart(df_melt).mark_line(point=True, strokeWidth=3).encode(
                 x=alt.X('Semana_Display:N', sort=alt.SortField(field="Semana", order='ascending'), title='Semana'),
                 y=alt.Y('Porcentagem:Q', title='Avanço (%)'), 
-                color=alt.Color('Métrica:N', scale=alt.Scale(scheme='category10')), 
+                color=alt.Color('Metrica:N', scale=alt.Scale(scheme='category10'), title='Métrica'), 
                 strokeDash=alt.condition(
-                    alt.datum.Métrica.contains('Previst'), 
-                    alt.value([5, 5]), # Linha tracejada para previsões
-                    alt.value([0])     # Linha contínua para o realizado
+                    "indexOf(datum.Metrica, 'Previst') > -1", # EXPRESSÃO DE VEGA-LITE SEGURA
+                    alt.value([5, 5]),
+                    alt.value([0])    
                 ),
-                tooltip=['Obra', 'Semana_Display', 'Métrica', alt.Tooltip('Porcentagem', format='.1f')]
+                tooltip=[
+                    'Obra', 
+                    'Semana_Display', 
+                    alt.Tooltip('Metrica:N', title='Métrica'), 
+                    alt.Tooltip('Porcentagem:Q', format='.1f')
+                ]
             ).properties(height=350).interactive()
             
             st.altair_chart(chart, use_container_width=True)
@@ -515,17 +509,14 @@ with tab_graficos:
         # 4. RENDERIZAÇÃO DA TABELA GERAL (Específica da obra atual)
         st.subheader("📋 Resumo Consolidado da Obra")
         
-        # Como as funções de banco de dados tem cache (@st.cache_data), não há problema em chamar de novo
         df_geral_slide = carregar_dados_gerais()
         df_orc_slide = st.session_state['orcamentos'].drop_duplicates(subset=['Obra'], keep='first')
         
-        # Filtra apenas a obra atual ANTES de fazer os cálculos pesados
         df_geral_slide = df_geral_slide[df_geral_slide["Obra"] == obra_atual].copy()
         
         if not df_geral_slide.empty:
             df_geral_slide = df_geral_slide.merge(df_orc_slide, on="Obra", how="left")
             
-            # Repete a lógica de cálculos da tabela geral para esta linha
             cols_num = ["Orcamento", "Orcamento Lajes", "Projetado", "Fabricado", "Acabado", "Expedido", "Montado"]
             for col in cols_num: 
                 if col in df_geral_slide.columns: df_geral_slide[col] = df_geral_slide[col].fillna(0.0)
@@ -548,7 +539,6 @@ with tab_graficos:
                 "Expedido", "Expedido %", "Montado", "Montado %", "Saldo Mont"
             ] if c in df_geral_slide.columns]
 
-            # Reutiliza o mesmo column_config da Aba 4
             st.dataframe(
                 df_geral_slide[cols_final], use_container_width=True, hide_index=True,
                 column_config={
@@ -570,7 +560,8 @@ with tab_graficos:
                     "Expedido %": st.column_config.NumberColumn("Exp. %", format="%.1f%%"),
                 }
             )
-# --- ABA 4: TABELA GERAL (VISÃO DETALHADA + SALDO DIAS) ---
+
+# --- ABA 4: TABELA GERAL ---
 with tab_geral:
     st.subheader("🏗️ Resumo Geral Detalhado")
     try:
@@ -578,7 +569,6 @@ with tab_geral:
         df_orc_clean = st.session_state['orcamentos'].drop_duplicates(subset=['Obra'], keep='first')
         df_geral = df_geral.merge(df_orc_clean, on="Obra", how="left")
 
-        # Cálculos Numéricos
         cols_num = ["Orcamento", "Orcamento Lajes", "Projetado", "Fabricado", "Acabado", "Expedido", "Montado"]
         for col in cols_num: 
             if col in df_geral.columns: df_geral[col] = df_geral[col].fillna(0.0)
@@ -586,7 +576,6 @@ with tab_geral:
         for etapa in ["Projetado", "Fabricado", "Acabado", "Expedido", "Montado"]:
             df_geral[f"{etapa} %"] = df_geral.apply(lambda r: (r[etapa]/r["Orcamento"]*100) if r["Orcamento"]>0 else 0, axis=1)
 
-        # Cálculo Saldo de Dias
         hoje = pd.to_datetime(datetime.date.today())
         cols_fim = ["Fim Projeto", "Fim Fabricacao", "Fim Montagem"]
         
@@ -602,18 +591,13 @@ with tab_geral:
         df_geral['Saldo Fab'] = df_geral.apply(lambda r: calc_saldo(r, 'Fim Fabricacao'), axis=1)
         df_geral['Saldo Mont'] = df_geral.apply(lambda r: calc_saldo(r, 'Fim Montagem'), axis=1)
 
-        # --- ORDEM FINAL (Conforme solicitado) ---
         colunas_ordenadas = [
             "Obra", "Orcamento", "Orcamento Lajes",
-            
             "Projetado", "Projetado %", "Saldo Proj",
             "Taxa de Aço",
-            
             "Fabricado", "Fabricado %", "Saldo Fab",
-            
             "Acabado", "Acabado %",
             "Expedido", "Expedido %",
-            
             "Montado", "Montado %", "Saldo Mont"
         ]
         
@@ -625,21 +609,15 @@ with tab_geral:
                 "Orcamento": st.column_config.NumberColumn("Orçamento", format="%.2f"),
                 "Orcamento Lajes": st.column_config.NumberColumn("Orç. Lajes", format="%.2f"),
                 "Taxa de Aço": st.column_config.NumberColumn("Aço (kg/m³)", format="%.2f"),
-                
-                # Etapas com Saldo
                 "Projetado": st.column_config.NumberColumn("Vol. Proj.", format="%.2f"),
                 "Projetado %": st.column_config.NumberColumn("Proj. %", format="%.1f%%"), 
                 "Saldo Proj": st.column_config.NumberColumn("⏳ Dias", format="%d d"),
-
                 "Fabricado": st.column_config.NumberColumn("Vol. Fab.", format="%.2f"),
                 "Fabricado %": st.column_config.NumberColumn("Fab. %", format="%.1f%%"),
                 "Saldo Fab": st.column_config.NumberColumn("⏳ Dias", format="%d d"),
-
                 "Montado": st.column_config.NumberColumn("Vol. Mont.", format="%.2f"),
                 "Montado %": st.column_config.NumberColumn("Mont. %", format="%.1f%%"),
                 "Saldo Mont": st.column_config.NumberColumn("⏳ Dias", format="%d d"),
-
-                # Etapas sem saldo
                 "Acabado": st.column_config.NumberColumn("Vol. Acab.", format="%.2f"),
                 "Acabado %": st.column_config.NumberColumn("Acab. %", format="%.1f%%"),
                 "Expedido": st.column_config.NumberColumn("Vol. Exp.", format="%.2f"),
@@ -669,7 +647,7 @@ with tab_geral:
     except Exception as e:
         st.error(f"Erro ao gerar tabela: {e}")
 
-# --- ABA 5: PLANEJADOR (RESTAURADA) ---
+# --- ABA 5: PLANEJADOR ---
 with tab_planejador:
     st.subheader("📅 Planejador de Obra")
     st.info("Simule uma nova obra usando a estrutura de datas de uma obra existente OU a média geral.")
@@ -710,7 +688,6 @@ with tab_planejador:
                 if not df_medias.empty:
                     media = df_medias.iloc[0]
                     ini_p = pd.to_datetime(data_inicio_simulacao)
-                    # Exemplo simples de projeção linear baseado nas médias
                     fim_p = ini_p + pd.Timedelta(days=media['dias_duracao_proj'])
                     ini_f = ini_p + pd.Timedelta(days=media['dias_lag_fab'])
                     fim_f = ini_f + pd.Timedelta(days=media['dias_duracao_fab'])
@@ -722,7 +699,6 @@ with tab_planejador:
                 df_datas = carregar_datas_limite_etapas(obra_referencia)
                 if not df_datas.empty and not df_datas.iloc[0].isnull().all():
                     raw = df_datas.iloc[0]
-                    # Calcula durações da obra referência e aplica na nova data de início
                     dur_p = (raw['fim_proj'] - raw['ini_proj']).days
                     lag_f = (raw['ini_fab'] - raw['ini_proj']).days
                     dur_f = (raw['fim_fab'] - raw['ini_fab']).days
@@ -755,7 +731,6 @@ with tab_planejador:
                 df_plan = pd.DataFrame({'Semana': todas_semanas})
                 df_plan['Semana Display'] = df_plan['Semana'].apply(formatar_semana)
                 
-                # Distribuição Linear Simples (Volume Total / Numero de Semanas)
                 vp = total_vol_input / len(semanas_proj) if semanas_proj else 0
                 vf = total_vol_input / len(semanas_fab) if semanas_fab else 0
                 vm = total_vol_input / len(semanas_mont) if semanas_mont else 0
@@ -784,7 +759,7 @@ with tab_warroom:
     with c1:
         if st.button("🔄 Atualizar agora", key="btn_war_room_refresh"):
             carregar_war_room.clear()
-            st.experimental_rerun()
+            st.rerun() # CORRIGIDO AQUI DE experimental_rerun PARA rerun
     with c2:
         st.write("")
 
@@ -829,11 +804,9 @@ with tab_warroom:
 
         def style_row(row):
             styles = [""] * len(df_wr.columns)
-            # Coluna ativa (hora)
             if active_col in df_wr.columns:
                 idx = df_wr.columns.get_loc(active_col)
                 styles[idx] = "background-color:#fee2e2; color:#b91c1c; font-weight:700"
-            # Ontem Real (meta batida)
             idx_ontem = df_wr.columns.get_loc("Ontem Real")
             styles[idx_ontem] = "color:#16a34a; font-weight:700" if meta_batida[row.name] else "color:#dc2626; font-weight:700"
             return styles
