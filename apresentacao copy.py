@@ -476,25 +476,29 @@ with tab_graficos:
 
         st.markdown("---")
 
-        # 3. RENDERIZAÇÃO DO GRÁFICO 
-        df_obra_chart = df_calculado[df_calculado["Obra"] == obra_atual]
+  # 3. RENDERIZAÇÃO DO GRÁFICO 
+        df_obra_chart = df_calculado[df_calculado["Obra"] == obra_atual].copy()
         
         if not df_obra_chart.empty:
             df_melt = df_obra_chart.melt(
                 id_vars=["Obra", "Semana_Display", "Semana"], 
                 value_vars=[c for c in ["Projetado %", "Projeto Previsto %", "Fabricado %", "Fabricação Prevista %", "Montado %", "Montagem Prevista %"] if c in df_obra_chart.columns],
-                var_name="Metrica", # NOME SEM ACENTO PARA NÃO QUEBRAR O ALTAIR
+                var_name="Metrica", # Nome limpo para o Altair ler sem quebrar
                 value_name="Porcentagem"
             )
+            
+            # CORREÇÃO: Coluna extra criada pelo Pandas para forçar a linha tracejada com segurança
+            df_melt["Status"] = df_melt["Metrica"].apply(lambda x: "Previsão" if "Previst" in x else "Realizado")
             
             chart = alt.Chart(df_melt).mark_line(point=True, strokeWidth=3).encode(
                 x=alt.X('Semana_Display:N', sort=alt.SortField(field="Semana", order='ascending'), title='Semana'),
                 y=alt.Y('Porcentagem:Q', title='Avanço (%)'), 
                 color=alt.Color('Metrica:N', scale=alt.Scale(scheme='category10'), title='Métrica'), 
-                strokeDash=alt.condition(
-                    "indexOf(datum.Metrica, 'Previst') > -1", # EXPRESSÃO DE VEGA-LITE SEGURA
-                    alt.value([5, 5]),
-                    alt.value([0])    
+                # Lemos a coluna Status diretamente. [1, 0] = Linha Sólida | [5, 5] = Linha Tracejada
+                strokeDash=alt.StrokeDash(
+                    'Status:N', 
+                    scale=alt.Scale(domain=["Realizado", "Previsão"], range=[[1, 0], [5, 5]]), 
+                    title='Tipo de Linha'
                 ),
                 tooltip=[
                     'Obra', 
